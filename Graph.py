@@ -36,28 +36,83 @@ def process_and_plot(period_days):
     # Add a column for the count of items (each row represents one item)
     sales_data['Item Count'] = 1
 
-    # Group data by user-defined period (e.g., every 'period_days' days)
-    grouped_data = sales_data.resample(f'{period_days}D', on='Date').agg({
+    # Separate refunded and non-refunded items
+    refunded_data = sales_data[sales_data['Status'].str.contains('Refunded', case=False, na=False)]
+    non_refunded_data = sales_data[~sales_data['Status'].str.contains('Refunded', case=False, na=False)]
+
+    # Determine the resampling period
+    if period_days == 0:
+        resample_period = 'ME'  # Monthly grouping (End of each month)
+        period_label = "Monthly"
+        bar_width = 15
+    else:
+        resample_period = f'{period_days}D'
+        period_label = f"Every {period_days} Days"
+        bar_width = max(1, period_days // 2)  # Dynamic width for better visuals
+
+    # Group data by the selected period for non-refunded items
+    grouped_data = non_refunded_data.resample(resample_period, on='Date').agg({
         'Income EUR': 'sum',  # Sum up income
         'Item Count': 'sum'   # Count items
     }).reset_index()
 
-    # Calculate the daily average income per defined period
-    grouped_data['Avg Daily Income EUR'] = grouped_data['Income EUR'] / period_days
+    # Group data by the selected period for refunded items
+    grouped_refunded_data = refunded_data.resample(resample_period, on='Date').agg({
+        'Income EUR': 'sum',  # Sum up refunded income
+        'Item Count': 'sum'   # Count refunded items
+    }).reset_index()
 
-    # Plot the data (swapped visuals, with Income EUR as bars and Items Sold as a line)
+    # Calculate the daily average income per period
+    grouped_data['Avg Daily Income EUR'] = grouped_data['Income EUR'] / (
+        grouped_data['Date'].dt.days_in_month if period_days == 0 else period_days
+    )
+
+    # Plot the data
     plt.figure(figsize=(12, 6))
-    plt.bar(grouped_data['Date'], grouped_data['Income EUR'], label='Income EUR', color='orange', alpha=0.7, width=2)
-    plt.plot(grouped_data['Date'], grouped_data['Item Count'], label='Items Sold', color='blue', marker='o')
 
-    # Add a line for the average daily income per user-defined period
-    plt.plot(grouped_data['Date'], grouped_data['Avg Daily Income EUR'], label='Avg Daily Income EUR', color='green', linestyle='--', marker='x')
+    # Non-refunded income (bar)
+    plt.bar(grouped_data['Date'], grouped_data['Income EUR'], label='Income EUR (Non-Refunded)', 
+            color='orange', alpha=0.7, width=bar_width)
+
+    # Items Sold (line with markers)
+    plt.plot(grouped_data['Date'], grouped_data['Item Count'], label='Items Sold (Non-Refunded)', 
+             color='blue', marker='o', linestyle='-')
+
+    # Avg Daily Income (dashed line with labels)
+    plt.plot(grouped_data['Date'], grouped_data['Avg Daily Income EUR'], label='Avg Daily Income EUR', 
+             color='green', linestyle='--', marker='x')
+
+    # Annotate Avg Daily Income
+    for i, row in grouped_data.iterrows():
+        plt.text(row['Date'], row['Avg Daily Income EUR'], 
+                 f"{row['Avg Daily Income EUR']:.2f}", 
+                 fontsize=10, color='green', ha='left', va='bottom')
+
+    # Annotate Income EUR on top of bar
+    for i, row in grouped_data.iterrows():
+        plt.text(row['Date'], row['Income EUR'], 
+                 f"{row['Income EUR']:.0f}€", 
+                 fontsize=10, color='darkorange', ha='center', va='bottom')
+
+    # Annotate Items Sold next to dot
+    for i, row in grouped_data.iterrows():
+        plt.text(row['Date'], row['Item Count'], 
+                 f"{int(row['Item Count'])}", 
+                 fontsize=10, color='blue', ha='center', va='bottom')
+
+    # Refunded income (red bars)
+    plt.bar(grouped_refunded_data['Date'], grouped_refunded_data['Income EUR'], label='Refunded Income EUR', 
+            color='red', alpha=0.5, width=bar_width)
+
+    # Refunded items (purple line)
+    plt.plot(grouped_refunded_data['Date'], grouped_refunded_data['Item Count'], label='Refunded Items', 
+             color='purple', marker='s', linestyle='-')
 
     # Formatting the graph
-    plt.title(f'Income, Items Sold, and Average Daily Income Every {period_days} Days', fontsize=16)
+    plt.title(f'Income, Items Sold, and Average Daily Income ({period_label})', fontsize=16)
     plt.xlabel('Date', fontsize=12)
     plt.ylabel('Amount', fontsize=12)
-    plt.xticks(rotation=45)
+    plt.xticks(rotation=45, ha='right')  # Align x-axis labels for better readability
     plt.legend()
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.tight_layout()
@@ -66,7 +121,10 @@ def process_and_plot(period_days):
     plt.show()
 
     # Display the updated data with the daily average income
+    print("Non-refunded data:")
     print(grouped_data[['Date', 'Income EUR', 'Item Count', 'Avg Daily Income EUR']])
+    print("\nRefunded data:")
+    print(grouped_refunded_data[['Date', 'Income EUR', 'Item Count']])
 
 # Function to show the input dialog for period days
 def get_period_from_user():
@@ -75,11 +133,11 @@ def get_period_from_user():
     root.withdraw()  # Hide the root window
 
     # Ask the user for the number of days per period
-    period_days = simpledialog.askinteger("Input", "Enter the number of days per period:",
-                                          minvalue=1, maxvalue=30)  # Set a reasonable range for period days
+    period_days = simpledialog.askinteger("Input", "Enter the number of days per period (0 for monthly breakdown):",
+                                          minvalue=0, maxvalue=30)  # Allow 0 for monthly grouping
 
     # Check if the user entered a valid value
-    if period_days:
+    if period_days is not None:
         # Proceed with the processing and plotting
         process_and_plot(period_days)
     else:
