@@ -22,6 +22,11 @@ def process_and_plot(period_days):
     for file in files:
         file_path = os.path.join(sales_directory, file)
         data = pd.read_csv(file_path)
+        
+        # Extract year-month from filename (e.g., "sales-2024-03.csv" -> "2024-03")
+        file_month = file.replace('sales-', '').replace('.csv', '')
+        data['File_Month'] = file_month
+        
         all_data.append(data)
 
     # Concatenate all data into one DataFrame
@@ -42,30 +47,53 @@ def process_and_plot(period_days):
 
     # Determine the resampling period
     if period_days == 0:
-        resample_period = 'ME'  # Monthly grouping (End of each month)
-        period_label = "Monthly"
+        # Group by the CSV file month instead of calendar month
+        period_label = "Monthly (by File)"
         bar_width = 15
+        
+        # Group by File_Month for non-refunded items
+        grouped_data = non_refunded_data.groupby('File_Month').agg({
+            'Income EUR': 'sum',
+            'Item Count': 'sum',
+            'Date': 'min'  # Use the earliest date in each file as the x-axis point
+        }).reset_index()
+        
+        # Group by File_Month for refunded items
+        grouped_refunded_data = refunded_data.groupby('File_Month').agg({
+            'Income EUR': 'sum',
+            'Item Count': 'sum',
+            'Date': 'min'
+        }).reset_index()
+        
+        # Calculate days in each file's month for average
+        grouped_data['Days_in_Period'] = grouped_data['File_Month'].apply(
+            lambda x: pd.Period(x).days_in_month
+        )
+        grouped_data['Avg Daily Income EUR'] = grouped_data['Income EUR'] / grouped_data['Days_in_Period']
+        
     else:
         resample_period = f'{period_days}D'
         period_label = f"Every {period_days} Days"
-        bar_width = max(1, period_days // 2)  # Dynamic width for better visuals
+        bar_width = max(1, period_days // 2)
 
-    # Group data by the selected period for non-refunded items
-    grouped_data = non_refunded_data.resample(resample_period, on='Date').agg({
-        'Income EUR': 'sum',  # Sum up income
-        'Item Count': 'sum'   # Count items
-    }).reset_index()
+        # Group data by the selected period for non-refunded items
+        grouped_data = non_refunded_data.resample(resample_period, on='Date').agg({
+            'Income EUR': 'sum',
+            'Item Count': 'sum'
+        }).reset_index()
 
-    # Group data by the selected period for refunded items
-    grouped_refunded_data = refunded_data.resample(resample_period, on='Date').agg({
-        'Income EUR': 'sum',  # Sum up refunded income
-        'Item Count': 'sum'   # Count refunded items
-    }).reset_index()
+        # Group data by the selected period for refunded items
+        grouped_refunded_data = refunded_data.resample(resample_period, on='Date').agg({
+            'Income EUR': 'sum',
+            'Item Count': 'sum'
+        }).reset_index()
 
-    # Calculate the daily average income per period
-    grouped_data['Avg Daily Income EUR'] = grouped_data['Income EUR'] / (
-        grouped_data['Date'].dt.days_in_month if period_days == 0 else period_days
-    )
+        # Calculate the daily average income per period
+        grouped_data['Avg Daily Income EUR'] = grouped_data['Income EUR'] / period_days
+
+    # Sort by date to ensure proper plotting
+    grouped_data = grouped_data.sort_values('Date')
+    grouped_refunded_data = grouped_refunded_data.sort_values('Date')
 
     # Plot the data
     plt.figure(figsize=(12, 6))
@@ -100,19 +128,20 @@ def process_and_plot(period_days):
                  f"{int(row['Item Count'])}", 
                  fontsize=10, color='blue', ha='center', va='bottom')
 
-    # Refunded income (red bars)
-    plt.bar(grouped_refunded_data['Date'], grouped_refunded_data['Income EUR'], label='Refunded Income EUR', 
-            color='red', alpha=0.5, width=bar_width)
+    # Refunded income (red bars) - only if there's refunded data
+    if not grouped_refunded_data.empty:
+        plt.bar(grouped_refunded_data['Date'], grouped_refunded_data['Income EUR'], 
+                label='Refunded Income EUR', color='red', alpha=0.5, width=bar_width)
 
-    # Refunded items (purple line)
-    plt.plot(grouped_refunded_data['Date'], grouped_refunded_data['Item Count'], label='Refunded Items', 
-             color='purple', marker='s', linestyle='-')
+        # Refunded items (purple line)
+        plt.plot(grouped_refunded_data['Date'], grouped_refunded_data['Item Count'], 
+                 label='Refunded Items', color='purple', marker='s', linestyle='-')
 
     # Formatting the graph
     plt.title(f'Income, Items Sold, and Average Daily Income ({period_label})', fontsize=16)
     plt.xlabel('Date', fontsize=12)
     plt.ylabel('Amount', fontsize=12)
-    plt.xticks(rotation=45, ha='right')  # Align x-axis labels for better readability
+    plt.xticks(rotation=45, ha='right')
     plt.legend()
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.tight_layout()
@@ -122,9 +151,17 @@ def process_and_plot(period_days):
 
     # Display the updated data with the daily average income
     print("Non-refunded data:")
-    print(grouped_data[['Date', 'Income EUR', 'Item Count', 'Avg Daily Income EUR']])
-    print("\nRefunded data:")
-    print(grouped_refunded_data[['Date', 'Income EUR', 'Item Count']])
+    if period_days == 0:
+        print(grouped_data[['File_Month', 'Date', 'Income EUR', 'Item Count', 'Avg Daily Income EUR']])
+    else:
+        print(grouped_data[['Date', 'Income EUR', 'Item Count', 'Avg Daily Income EUR']])
+    
+    if not grouped_refunded_data.empty:
+        print("\nRefunded data:")
+        if period_days == 0:
+            print(grouped_refunded_data[['File_Month', 'Date', 'Income EUR', 'Item Count']])
+        else:
+            print(grouped_refunded_data[['Date', 'Income EUR', 'Item Count']])
 
 # Function to show the input dialog for period days
 def get_period_from_user():
@@ -134,7 +171,7 @@ def get_period_from_user():
 
     # Ask the user for the number of days per period
     period_days = simpledialog.askinteger("Input", "Enter the number of days per period (0 for monthly breakdown):",
-                                          minvalue=0, maxvalue=30)  # Allow 0 for monthly grouping
+                                          minvalue=0, maxvalue=30)
 
     # Check if the user entered a valid value
     if period_days is not None:
